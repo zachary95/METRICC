@@ -2,6 +2,10 @@
   // "vertical" = labels above values, "horizontal" = single row
   "layout": "vertical",
 
+  // Background process that polls usage on your behalf, shared across all sessions.
+  // Set false to disable and fall back to a direct fetch per session (on by default).
+  "daemon": true,
+
   // --- Standard (on by default) ---
   "5h Usage": true,      // 5-hour rolling rate-limit utilization %
   "7d Usage": true,      // 7-day rolling rate-limit utilization %

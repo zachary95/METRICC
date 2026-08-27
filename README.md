@@ -248,6 +248,7 @@ Edit `~/.claude/hud/config.jsonc` to toggle any stat on or off:
 ```jsonc
 {
   "layout": "vertical",     // or "horizontal"
+  "daemon": true,           // shared background poller; set false for a per-session direct fetch
 
   // ── Standard (on by default) ──
   "5h Usage": true,
@@ -274,6 +275,7 @@ Edit `~/.claude/hud/config.jsonc` to toggle any stat on or off:
 
  - ![](docs/images/icon-16px-check-square-slate-500-regular.png) No restart required — changes apply on next render
  - ![](docs/images/icon-16px-check-square-slate-500-regular.png) Missing keys fall back to their section default
+ - ![](docs/images/icon-16px-check-square-slate-500-regular.png) `daemon: false` opts out of the shared background poller if you'd rather not run a persistent process holding your OAuth token
 
 ---
 
