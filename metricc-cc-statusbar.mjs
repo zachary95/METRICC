@@ -544,7 +544,13 @@ function codexWindowPercent(window) {
   return Math.max(0, Math.min(100, window.used_percent));
 }
 
-// { fiveHour, sevenDay } from the latest Codex token_count event, or null when there is no Codex data.
+// Converts a window's unix-seconds resets_at into a Date for formatResetTime.
+function codexWindowResets(window) {
+  if (!window?.resets_at) return null;
+  return new Date(window.resets_at * 1000);
+}
+
+// { fiveHour, fiveHourResets, sevenDay, sevenDayResets } from the latest Codex token_count event, or null when there is no Codex data.
 function getCodexUsage() {
   try {
     for (const file of newestCodexSessionFiles()) {
@@ -555,7 +561,12 @@ function getCodexUsage() {
         try { entry = JSON.parse(lines[index]); } catch { continue; }
         const rateLimits = entry.payload?.rate_limits;
         if (!rateLimits) continue;
-        return { fiveHour: codexWindowPercent(rateLimits.primary), sevenDay: codexWindowPercent(rateLimits.secondary) };
+        return {
+          fiveHour: codexWindowPercent(rateLimits.primary),
+          fiveHourResets: codexWindowResets(rateLimits.primary),
+          sevenDay: codexWindowPercent(rateLimits.secondary),
+          sevenDayResets: codexWindowResets(rateLimits.secondary),
+        };
       }
     }
   } catch { /* no Codex data */ }
@@ -818,8 +829,10 @@ function render(usage, usageStale, transcript, contextPct, modelId, version, lat
   if (show("Codex") && codexUsage) {
     const fiveHourColor = colorForPercent(codexUsage.fiveHour, 60, 80);
     const sevenDayColor = colorForPercent(codexUsage.sevenDay, 60, 80);
-    columns.push({ label: `${c.slate800bold}Codex 5h:${c.reset}`, value: `${fiveHourColor}${Math.round(codexUsage.fiveHour)}%${c.reset}` });
-    columns.push({ label: `${c.slate800bold}Codex 7d:${c.reset}`, value: `${sevenDayColor}${Math.round(codexUsage.sevenDay)}%${c.reset}` });
+    const fiveHourReset = formatResetTime(codexUsage.fiveHourResets);
+    const sevenDayReset = formatResetTime(codexUsage.sevenDayResets);
+    columns.push({ label: `${c.slate800bold}Codex 5h:${c.reset}`, value: `${fiveHourColor}${Math.round(codexUsage.fiveHour)}%${c.reset}${fiveHourReset ? ` ${fiveHourReset}` : ""}` });
+    columns.push({ label: `${c.slate800bold}Codex 7d:${c.reset}`, value: `${sevenDayColor}${Math.round(codexUsage.sevenDay)}%${c.reset}${sevenDayReset ? ` ${sevenDayReset}` : ""}` });
   }
 
   // Version
