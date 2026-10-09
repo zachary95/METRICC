@@ -53,7 +53,7 @@ const VERSION_CACHE_PATH = join(HOME, ".claude", "hud", ".version-cache.json");
 const HISTORY_PATH = join(HOME, ".claude", "hud", ".usage-history.json");
 const CRED_PATH = join(HOME, ".claude", ".credentials.json");
 const CODEX_SESSIONS_PATH = join(HOME, ".codex", "sessions");
-const CODEX_DAY_DIRS_TO_SCAN = 2; // a session started yesterday may still be the one writing now
+const CODEX_DAY_DIRS_TO_SCAN = 7; // resumed sessions keep writing into the day folder they started in
 
 // ── ANSI Colors ────────────────────────────────────────────────────────────────
 const c = {
@@ -561,6 +561,8 @@ function getCodexUsage() {
         try { entry = JSON.parse(lines[index]); } catch { continue; }
         const rateLimits = entry.payload?.rate_limits;
         if (!rateLimits) continue;
+        if (rateLimits.limit_id && rateLimits.limit_id !== "codex") continue;
+        if (!rateLimits.primary && !rateLimits.secondary) continue;
         return {
           fiveHour: codexWindowPercent(rateLimits.primary),
           fiveHourResets: codexWindowResets(rateLimits.primary),
