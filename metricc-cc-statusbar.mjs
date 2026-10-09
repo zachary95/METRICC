@@ -7,9 +7,10 @@
  * - stdin JSON from Claude Code (context window, model, transcript path)
  * - Anthropic OAuth API (5h/7d rate limits) — cached 60s
  * - Transcript JSONL (session start, running agents)
+ * - Codex session logs (~/.codex/sessions) for Codex 5h/7d rate limits
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, statSync, openSync, readSync, closeSync, mkdirSync, unlinkSync, createReadStream } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, statSync, openSync, readSync, closeSync, mkdirSync, unlinkSync, createReadStream, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { createInterface } from "node:readline";
@@ -37,7 +38,7 @@ const VERSION_CACHE_TTL_MS = 3_600_000; // 1hr cache for npm version check
 
 const ALL_COLUMNS = [
   // Standard
-  "5h Usage", "7d Usage", "Context", "Model", "Version",
+  "5h Usage", "7d Usage", "Context", "Model", "Codex", "Version",
   // Session
   "Session", "Changes", "Directory", "Cost",
   // Advanced
@@ -51,6 +52,8 @@ const LOCK_PATH = join(HOME, ".claude", "hud", ".usage-cache.lock");
 const VERSION_CACHE_PATH = join(HOME, ".claude", "hud", ".version-cache.json");
 const HISTORY_PATH = join(HOME, ".claude", "hud", ".usage-history.json");
 const CRED_PATH = join(HOME, ".claude", ".credentials.json");
+const CODEX_SESSIONS_PATH = join(HOME, ".codex", "sessions");
+const CODEX_DAY_DIRS_TO_SCAN = 2; // a session started yesterday may still be the one writing now
 
 // ── ANSI Colors ────────────────────────────────────────────────────────────────
 const c = {
@@ -88,7 +91,7 @@ function parseJsonc(text) {
 
 const SECTION_DEFAULTS = {
   // Standard: on by default
-  "5h Usage": true, "7d Usage": true, "Context": true, "Model": true, "Version": true,
+  "5h Usage": true, "7d Usage": true, "Context": true, "Model": true, "Codex": true, "Version": true,
   // Session: off by default
   "Session": false, "Changes": false, "Directory": false, "Cost": false,
   // Advanced: off by default
@@ -501,6 +504,64 @@ async function getLatestVersion() {
   return latest;
 }
 
+// ── Codex Usage (local session logs) ─────────────────────────────────────────
+// Newest entries of a YYYY/MM/DD-style directory level, newest first.
+function newestSubdirs(parentPath) {
+  try {
+    return readdirSync(parentPath).filter((name) => /^\d+$/.test(name)).sort().reverse().map((name) => join(parentPath, name));
+  } catch {
+    return [];
+  }
+}
+
+// Rollout files from the newest day directories, most recently written first.
+function newestCodexSessionFiles() {
+  const dayDirs = [];
+  for (const yearDir of newestSubdirs(CODEX_SESSIONS_PATH)) {
+    for (const monthDir of newestSubdirs(yearDir)) {
+      for (const dayDir of newestSubdirs(monthDir)) {
+        if (dayDirs.length < CODEX_DAY_DIRS_TO_SCAN) dayDirs.push(dayDir);
+      }
+    }
+  }
+
+  const files = [];
+  for (const dayDir of dayDirs) {
+    for (const name of readdirSync(dayDir)) {
+      if (!name.startsWith("rollout-") || !name.endsWith(".jsonl")) continue;
+      const filePath = join(dayDir, name);
+      const stat = statSync(filePath);
+      files.push({ filePath, size: stat.size, mtimeMs: stat.mtimeMs });
+    }
+  }
+  return files.sort((first, second) => second.mtimeMs - first.mtimeMs);
+}
+
+// A window whose reset time has passed has rolled over to 0%.
+function codexWindowPercent(window) {
+  if (!window || typeof window.used_percent !== "number") return 0;
+  if (window.resets_at && window.resets_at * 1000 <= Date.now()) return 0;
+  return Math.max(0, Math.min(100, window.used_percent));
+}
+
+// { fiveHour, sevenDay } from the latest Codex token_count event, or null when there is no Codex data.
+function getCodexUsage() {
+  try {
+    for (const file of newestCodexSessionFiles()) {
+      const lines = readTailLines(file.filePath, file.size, MAX_TAIL_BYTES);
+      for (let index = lines.length - 1; index >= 0; index--) {
+        if (!lines[index].includes('"token_count"')) continue;
+        let entry;
+        try { entry = JSON.parse(lines[index]); } catch { continue; }
+        const rateLimits = entry.payload?.rate_limits;
+        if (!rateLimits) continue;
+        return { fiveHour: codexWindowPercent(rateLimits.primary), sevenDay: codexWindowPercent(rateLimits.secondary) };
+      }
+    }
+  } catch { /* no Codex data */ }
+  return null;
+}
+
 // ── Transcript Parser ──────────────────────────────────────────────────────────
 function readTailLines(filePath, fileSize, maxBytes) {
   const start = Math.max(0, fileSize - maxBytes);
@@ -686,7 +747,7 @@ function padAnsi(str, width) {
 
 
 
-function render(usage, usageStale, transcript, contextPct, modelId, version, latestVersion, cost, stdinData, config) {
+function render(usage, usageStale, transcript, contextPct, modelId, version, latestVersion, cost, stdinData, config, codexUsage) {
   const pipe = `${c.slate800}│`;
   const show = (id) => config.columns.includes(id);
   // Dimmed color still shows the real value's severity (red/yellow/green), just softened to signal "from cache".
@@ -751,6 +812,14 @@ function render(usage, usageStale, transcript, contextPct, modelId, version, lat
   // Model
   if (show("Model")) {
     columns.push({ label: `${c.slate800bold}Model:${c.reset}`, value: `${c.slate600}${modelId}${c.reset}` });
+  }
+
+  // Codex rate limits (hidden when this machine has no Codex sessions)
+  if (show("Codex") && codexUsage) {
+    const fiveHourColor = colorForPercent(codexUsage.fiveHour, 60, 80);
+    const sevenDayColor = colorForPercent(codexUsage.sevenDay, 60, 80);
+    columns.push({ label: `${c.slate800bold}Codex 5h:${c.reset}`, value: `${fiveHourColor}${Math.round(codexUsage.fiveHour)}%${c.reset}` });
+    columns.push({ label: `${c.slate800bold}Codex 7d:${c.reset}`, value: `${sevenDayColor}${Math.round(codexUsage.sevenDay)}%${c.reset}` });
   }
 
   // Version
@@ -907,7 +976,9 @@ async function main() {
     getLatestVersion(),
   ]);
 
-  console.log(render(usageResult.data, usageResult.stale, transcript, contextPct, modelId, version, latestVersion, stdin.cost, stdin, config));
+  const codexUsage = config.columns.includes("Codex") ? getCodexUsage() : null;
+
+  console.log(render(usageResult.data, usageResult.stale, transcript, contextPct, modelId, version, latestVersion, stdin.cost, stdin, config, codexUsage));
 }
 
 main().catch((err) => {
