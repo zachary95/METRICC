@@ -833,8 +833,8 @@ function render(usage, usageStale, transcript, contextPct, modelId, version, lat
     const sevenDayColor = colorForPercent(codexUsage.sevenDay, 60, 80);
     const fiveHourReset = formatResetTime(codexUsage.fiveHourResets);
     const sevenDayReset = formatResetTime(codexUsage.sevenDayResets);
-    columns.push({ label: `${c.slate800bold}Codex 5h:${c.reset}`, value: `${fiveHourColor}${Math.round(codexUsage.fiveHour)}%${c.reset}${fiveHourReset ? ` ${fiveHourReset}` : ""}` });
-    columns.push({ label: `${c.slate800bold}Codex 7d:${c.reset}`, value: `${sevenDayColor}${Math.round(codexUsage.sevenDay)}%${c.reset}${sevenDayReset ? ` ${sevenDayReset}` : ""}` });
+    columns.push({ label: `${c.slate800bold}5h Codex:${c.reset}`, value: `${fiveHourColor}${Math.round(codexUsage.fiveHour)}%${c.reset}${fiveHourReset ? ` ${fiveHourReset}` : ""}` });
+    columns.push({ label: `${c.slate800bold}7d Codex:${c.reset}`, value: `${sevenDayColor}${Math.round(codexUsage.sevenDay)}%${c.reset}${sevenDayReset ? ` ${sevenDayReset}` : ""}` });
   }
 
   // Version
