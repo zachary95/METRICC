@@ -550,27 +550,41 @@ function codexWindowResets(window) {
   return new Date(window.resets_at * 1000);
 }
 
-// { fiveHour, fiveHourResets, sevenDay, sevenDayResets } from the latest Codex token_count event, or null when there is no Codex data.
+// The last Codex rate_limits payload in a rollout file with its event time, or null when the file has none.
+function lastCodexRateLimits(file) {
+  const lines = readTailLines(file.filePath, file.size, MAX_TAIL_BYTES);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (!lines[index].includes('"token_count"')) continue;
+    let entry;
+    try { entry = JSON.parse(lines[index]); } catch { continue; }
+    const rateLimits = entry.payload?.rate_limits;
+    if (!rateLimits) continue;
+    if (rateLimits.limit_id && rateLimits.limit_id !== "codex") continue;
+    if (!rateLimits.primary && !rateLimits.secondary) continue;
+    return { rateLimits, timestampMs: Date.parse(entry.timestamp) || 0 };
+  }
+  return null;
+}
+
+// { fiveHour, fiveHourResets, sevenDay, sevenDayResets } from the newest Codex token_count event, or null when there is no Codex data.
+// Codex appends non-usage events (e.g. thread_settings_applied) to old threads, so mtime alone doesn't point at the newest usage.
 function getCodexUsage() {
   try {
+    let newest = null;
     for (const file of newestCodexSessionFiles()) {
-      const lines = readTailLines(file.filePath, file.size, MAX_TAIL_BYTES);
-      for (let index = lines.length - 1; index >= 0; index--) {
-        if (!lines[index].includes('"token_count"')) continue;
-        let entry;
-        try { entry = JSON.parse(lines[index]); } catch { continue; }
-        const rateLimits = entry.payload?.rate_limits;
-        if (!rateLimits) continue;
-        if (rateLimits.limit_id && rateLimits.limit_id !== "codex") continue;
-        if (!rateLimits.primary && !rateLimits.secondary) continue;
-        return {
-          fiveHour: codexWindowPercent(rateLimits.primary),
-          fiveHourResets: codexWindowResets(rateLimits.primary),
-          sevenDay: codexWindowPercent(rateLimits.secondary),
-          sevenDayResets: codexWindowResets(rateLimits.secondary),
-        };
-      }
+      // A file can't hold an event newer than its own mtime.
+      if (newest && file.mtimeMs < newest.timestampMs) break;
+      const candidate = lastCodexRateLimits(file);
+      if (candidate && (!newest || candidate.timestampMs > newest.timestampMs)) newest = candidate;
     }
+    if (!newest) return null;
+    const { primary, secondary } = newest.rateLimits;
+    return {
+      fiveHour: codexWindowPercent(primary),
+      fiveHourResets: codexWindowResets(primary),
+      sevenDay: codexWindowPercent(secondary),
+      sevenDayResets: codexWindowResets(secondary),
+    };
   } catch { /* no Codex data */ }
   return null;
 }
