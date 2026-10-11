@@ -21,7 +21,8 @@ function tokenCountLine(timestamp, fiveHourUsed, sevenDayUsed) {
   return JSON.stringify({ timestamp, type: "event_msg", payload: { type: "token_count", rate_limits: rateLimits } });
 }
 
-test("shows the newest Codex usage even when an older thread was touched later", () => {
+// A fake HOME with Codex session logs: the active thread at 32%/17%, plus an older thread reopened later.
+function homeWithSessionLogs() {
   const home = mkdtempSync(join(tmpdir(), "metricc-codex-"));
   const dayDir = join(home, ".codex", "sessions", "2026", "10", "07");
   mkdirSync(dayDir, { recursive: true });
@@ -39,12 +40,30 @@ test("shows the newest Codex usage even when an older thread was touched later",
   const hudDir = join(home, ".claude", "hud");
   mkdirSync(hudDir, { recursive: true });
   writeFileSync(join(hudDir, ".version-cache.json"), JSON.stringify({ timestamp: Date.now(), data: null }));
+  return home;
+}
 
+// Runs the HUD with the given HOME and returns a column-label → value lookup.
+function runHud(home) {
   const output = execFileSync("node", [SCRIPT_PATH], { input: "{}", env: { ...process.env, HOME: home } }).toString();
-  const plainOutput = output.replace(/\x1b\[[0-9;]*m/g, "").replace(/ /g, " ");
-
+  const plainOutput = output.replace(/\x1b\[[0-9;]*m/g, "").replace(/\u00A0/g, " ");
   const [header, values] = plainOutput.split("\n");
-  const columnValue = (label) => values.split("│")[header.split("│").findIndex((cell) => cell.includes(label))].trim();
+  return (label) => values.split("│")[header.split("│").findIndex((cell) => cell.includes(label))].trim();
+}
+
+test("shows the newest Codex usage even when an older thread was touched later", () => {
+  const columnValue = runHud(homeWithSessionLogs());
   assert.match(columnValue("5h Codex"), /^32%/);
   assert.match(columnValue("7d Codex"), /^17%/);
+});
+
+test("prefers live Codex usage over session logs, so an early reset shows right away", () => {
+  const home = homeWithSessionLogs();
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+  const liveUsage = { primary: { used_percent: 0, resets_at: resetsAt }, secondary: { used_percent: 0, resets_at: resetsAt } };
+  writeFileSync(join(home, ".claude", "hud", ".codex-usage-cache.json"), JSON.stringify({ timestamp: Date.now(), data: liveUsage, error: false }));
+
+  const columnValue = runHud(home);
+  assert.match(columnValue("5h Codex"), /^0%/);
+  assert.match(columnValue("7d Codex"), /^0%/);
 });
